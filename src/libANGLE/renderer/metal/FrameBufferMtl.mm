@@ -469,7 +469,7 @@ angle::Result FramebufferMtl::clearWithLoadOp(const gl::Context *context,
         auto attachmentIdx = attachmentCount++;
         mtl::RenderPassColorAttachmentDesc &colorAttachment =
             tempDesc.colorAttachments[attachmentIdx];
-        mtl::TextureRef texture = colorAttachment.texture.lock();
+        mtl::TextureRef texture = colorAttachment.texture;
 
         if (clearColorBuffers.test(colorIndexGL))
         {
@@ -541,18 +541,18 @@ angle::Result FramebufferMtl::clearWithDraw(const gl::Context *context,
     {
         mtl::RenderPassColorAttachmentDesc &colorAttachment =
             rpDesc.colorAttachments[attachmentIdx];
-        mtl::TextureRef texture = colorAttachment.texture.lock();
+        mtl::TextureRef texture = colorAttachment.texture;
 
         // Need to preserve previous content, since we only clear a portion of the framebuffer
         colorAttachment.loadAction = MTLLoadActionLoad;
     }
 
-    if (rpDesc.depthAttachment.texture.lock())
+    if (rpDesc.depthAttachment.texture)
     {
         rpDesc.depthAttachment.loadAction = MTLLoadActionLoad;
     }
 
-    if (rpDesc.stencilAttachment.texture.lock())
+    if (rpDesc.stencilAttachment.texture)
     {
         rpDesc.stencilAttachment.loadAction = MTLLoadActionLoad;
     }
@@ -685,7 +685,7 @@ angle::Result FramebufferMtl::readPixelsImpl(const gl::Context *context,
     {
         return angle::Result::Continue;
     }
-    mtl::TextureRef texture = renderTarget->getTexture().lock();
+    mtl::TextureRef texture = renderTarget->getTexture();
 
     if (!texture)
     {
@@ -704,14 +704,18 @@ angle::Result FramebufferMtl::readPixelsImpl(const gl::Context *context,
     auto packPixelsRowParams  = packPixelsParams;
     MTLRegion mtlSrcRowRegion = MTLRegionMake2D(area.x, area.y, area.width, 1);
 
-    NSUInteger rowOffset = packPixelsParams.reverseRowOrder ? -1 : 1;
+    NSInteger rowOffset = packPixelsParams.reverseRowOrder ? -1 : 1;
     NSUInteger startRow  = packPixelsParams.reverseRowOrder ? (area.y1() - 1) : area.y;
 
     // Make sure GPU & CPU contents are synchronized
-    mtl::BlitCommandEncoder *blitEncoder = contextMtl->getBlitCommandEncoder();
-    if (blitEncoder)
+    if (texture->isCPUReadMemDirty())
     {
-        blitEncoder->synchronizeResource(texture);
+        mtl::BlitCommandEncoder *blitEncoder = contextMtl->getBlitCommandEncoder();
+        if (blitEncoder)
+        {
+            blitEncoder->synchronizeResource(texture);
+        }
+        texture->resetCPUReadMemDirty();
     }
 
     // Copy pixels row by row
