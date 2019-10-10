@@ -8,7 +8,7 @@
 //   The shaders are then fed into glslang to spit out SPIR-V (libANGLE-side).
 //   See: https://www.khronos.org/registry/vulkan/specs/misc/GL_KHR_vulkan_glsl.txt
 //
-// This file is basically a copy of TranslatorMetal.cpp with some major differences:
+// This file is basically a copy of TranslatorVulkan.cpp with some major differences:
 // - The negViewportYScale will be used to scale the gl_Position.y
 //
 // In future, we should move common code between the two to a separate files.
@@ -669,14 +669,13 @@ void AddLineSegmentRasterizationEmulation(TInfoSinkBase &sink,
 }
 }  // anonymous namespace
 
-
 TranslatorMetal::TranslatorMetal(sh::GLenum type, ShShaderSpec spec)
     : TCompiler(type, spec, SH_GLSL_450_CORE_OUTPUT)
 {}
 
 void TranslatorMetal::translate(TIntermBlock *root,
-                                 ShCompileOptions compileOptions,
-                                 PerformanceDiagnostics * /*perfDiagnostics*/)
+                                ShCompileOptions compileOptions,
+                                PerformanceDiagnostics * /*perfDiagnostics*/)
 {
     TInfoSinkBase &sink = getInfoSink().obj;
     TOutputVulkanGLSLForMetal outputGLSL(sink, getArrayIndexClampingStrategy(), getHashFunction(),

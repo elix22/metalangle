@@ -30,7 +30,8 @@ ContextMtl::ContextMtl(const gl::State &state, gl::ErrorSet *errorSet, RendererM
       mtl::Context(renderer),
       mCmdBuffer(&renderer->cmdQueue()),
       mRenderEncoder(&mCmdBuffer),
-      mBlitEncoder(&mCmdBuffer)
+      mBlitEncoder(&mCmdBuffer),
+      mComputeEncoder(&mCmdBuffer)
 {}
 
 ContextMtl::~ContextMtl() {}
@@ -116,8 +117,8 @@ angle::Result ContextMtl::drawElements(const gl::Context *context,
         if (needConversion)
         {
             BufferMtl *acualBuffer = mtl::GetImpl(glElementArrayBuffer);
-            ANGLE_TRY(mVertexArray->convertIndexBuffer(context, type, acualBuffer,
-                                                       convertedOffset));
+            ANGLE_TRY(
+                mVertexArray->convertIndexBuffer(context, type, acualBuffer, convertedOffset));
             convertedOffset = mVertexArray->getElementArrayBufferOffset();
         }
     }
@@ -734,6 +735,11 @@ void ContextMtl::endEncoding(mtl::BlitCommandEncoder *encoder)
     encoder->endEncoding();
 }
 
+void ContextMtl::endEncoding(mtl::ComputeCommandEncoder *encoder)
+{
+    encoder->endEncoding();
+}
+
 void ContextMtl::endEncoding(bool forceSaveRenderPassContent)
 {
     if (mRenderEncoder.valid())
@@ -751,6 +757,11 @@ void ContextMtl::endEncoding(bool forceSaveRenderPassContent)
     if (mBlitEncoder.valid())
     {
         mBlitEncoder.endEncoding();
+    }
+
+    if (mComputeEncoder.valid())
+    {
+        mComputeEncoder.endEncoding();
     }
 }
 
@@ -811,6 +822,16 @@ mtl::RenderCommandEncoder *ContextMtl::getRenderCommandEncoder()
     }
 
     return &mRenderEncoder;
+}
+
+mtl::RenderCommandEncoder *ContextMtl::getCurrentFramebufferRenderCommandEncoder()
+{
+    if (!mDrawFramebuffer)
+    {
+        return nullptr;
+    }
+
+    return getRenderCommandEncoder(mDrawFramebuffer->getRenderPassDesc(this));
 }
 
 mtl::RenderCommandEncoder *ContextMtl::getRenderCommandEncoder(const mtl::RenderPassDesc &desc)
@@ -874,6 +895,20 @@ mtl::BlitCommandEncoder *ContextMtl::getBlitCommandEncoder()
     ensureCommandBufferValid();
 
     return &mBlitEncoder.restart();
+}
+
+mtl::ComputeCommandEncoder *ContextMtl::getComputeCommandEncoder()
+{
+    if (mComputeEncoder.valid())
+    {
+        return &mComputeEncoder;
+    }
+
+    endEncoding(true);
+
+    ensureCommandBufferValid();
+
+    return &mComputeEncoder.restart();
 }
 
 void ContextMtl::initializeCaps() const
