@@ -3,11 +3,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
+// mtl_resources.h:
+//    Declares wrapper classes for Metal's MTLTexture and MTLBuffer.
+//
 
 #ifndef LIBANGLE_RENDERER_METAL_MTL_RESOURCES_H_
 #define LIBANGLE_RENDERER_METAL_MTL_RESOURCES_H_
 
-#include "libANGLE/renderer/metal/Metal_platform.h"
+#import <Metal/Metal.h>
 
 #include <atomic>
 #include <memory>
@@ -19,6 +22,7 @@
 #include "libANGLE/ImageIndex.h"
 #include "libANGLE/angletypes.h"
 #include "libANGLE/renderer/metal/mtl_common.h"
+#include "libANGLE/renderer/metal/mtl_format_utils.h"
 
 namespace rx
 {
@@ -76,11 +80,13 @@ class Resource : angle::NonCopyable
     std::shared_ptr<Ref> mRef;
 };
 
-class Texture final : public Resource, public WrappedObject<id<MTLTexture>>
+class Texture final : public Resource,
+                      public WrappedObject<id<MTLTexture>>,
+                      public std::enable_shared_from_this<Texture>
 {
   public:
     static angle::Result Make2DTexture(ContextMtl *context,
-                                       MTLPixelFormat format,
+                                       const Format &format,
                                        uint32_t width,
                                        uint32_t height,
                                        uint32_t mips /** use zero to create full mipmaps chain */,
@@ -88,7 +94,7 @@ class Texture final : public Resource, public WrappedObject<id<MTLTexture>>
                                        TextureRef *refOut);
 
     static angle::Result MakeCubeTexture(ContextMtl *context,
-                                         MTLPixelFormat format,
+                                         const Format &format,
                                          uint32_t size,
                                          uint32_t mips /** use zero to create full mipmaps chain */,
                                          bool renderTargetOnly,
@@ -144,6 +150,8 @@ class Texture final : public Resource, public WrappedObject<id<MTLTexture>>
     // Create a texture view
     Texture(Texture *original, MTLTextureType type, NSRange mipmapLevelRange, uint32_t slice);
 
+    void syncContent(ContextMtl *context);
+
     MTLColorWriteMask mColorWritableMask = MTLColorWriteMaskAll;
 };
 
@@ -164,52 +172,6 @@ class Buffer final : public Resource, public WrappedObject<id<MTLBuffer>>
 
   private:
     Buffer(ContextMtl *context, size_t size, const uint8_t *data);
-};
-
-// This buffer allow the content to be updated n times within single
-// command buffer usage without flushing it. Where n=internal queue size.
-class StreamBuffer final : angle::NonCopyable
-{
-  public:
-    StreamBuffer(bool allocateShadowBuffer);
-    ~StreamBuffer();
-
-    angle::Result initialize(ContextMtl *context,
-                             size_t bufferSize,
-                             size_t queueSize    = 2,
-                             const uint8_t *data = nullptr);
-    void destroy();
-
-    bool valid() const { return mValid; }
-    size_t size() const { return mBufferSize; }
-
-    // Returns pointer to client side shadow buffer. Call commit() to submit the data
-    // modified in this buffer to GPU buffer
-    uint8_t *data();
-    const uint8_t *data() const;
-    // After finish, a ready to be used buffer is returned with most up to date
-    // data from shadow buffer
-    BufferRef commit(ContextMtl *context);
-    // Instead of commiting data from shadow buffer, commit provided data in argument
-    BufferRef commit(ContextMtl *context, const uint8_t *data);
-
-    BufferRef getCurrentBuffer(ContextMtl *context);
-
-  private:
-    angle::Result initializeImpl(ContextMtl *context,
-                                 size_t bufferSize,
-                                 size_t queueSize,
-                                 const uint8_t *data);
-
-    BufferRef prepareBuffer(ContextMtl *context);
-
-    angle::FastVector<BufferRef, 2> mBuffersQueue;
-    // Client side shadow buffer
-    angle::MemoryBuffer mShadowCopy;
-    size_t mBufferSize       = 0;
-    size_t mCurrentBufferIdx = 0;
-    bool mUseShadowCopy;
-    bool mValid = false;
 };
 
 }  // namespace mtl

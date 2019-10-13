@@ -4,6 +4,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
+// TextureMtl.mm:
+//    Implements the class methods for TextureMtl.
+//
 
 #include "libANGLE/renderer/metal/TextureMtl.h"
 
@@ -19,6 +22,50 @@
 
 namespace rx
 {
+
+namespace
+{
+
+MTLColorWriteMask GetColorWriteMask(const mtl::Format &mtlFormat, bool *emulatedChannelsOut)
+{
+    const angle::Format &intendedFormat = mtlFormat.intendedAngleFormat();
+    const angle::Format &actualFormat   = mtlFormat.actualAngleFormat();
+    bool emulatedChannels               = false;
+    MTLColorWriteMask colorWritableMask = MTLColorWriteMaskAll;
+    if (intendedFormat.alphaBits == 0 && actualFormat.alphaBits)
+    {
+        emulatedChannels = true;
+        // Disable alpha write to this texture
+        colorWritableMask = colorWritableMask & (~MTLColorWriteMaskAlpha);
+    }
+    if (intendedFormat.luminanceBits == 0)
+    {
+        if (intendedFormat.redBits == 0 && actualFormat.redBits)
+        {
+            emulatedChannels = true;
+            // Disable red write to this texture
+            colorWritableMask = colorWritableMask & (~MTLColorWriteMaskRed);
+        }
+        if (intendedFormat.greenBits == 0 && actualFormat.greenBits)
+        {
+            emulatedChannels = true;
+            // Disable green write to this texture
+            colorWritableMask = colorWritableMask & (~MTLColorWriteMaskGreen);
+        }
+        if (intendedFormat.blueBits == 0 && actualFormat.blueBits)
+        {
+            emulatedChannels = true;
+            // Disable blue write to this texture
+            colorWritableMask = colorWritableMask & (~MTLColorWriteMaskBlue);
+        }
+    }
+
+    *emulatedChannelsOut = emulatedChannels;
+
+    return colorWritableMask;
+}
+
+}  // namespace
 
 // TextureMtl implementation
 TextureMtl::TextureMtl(const gl::TextureState &state) : TextureImpl(state) {}
@@ -108,7 +155,10 @@ angle::Result TextureMtl::copyImage(const gl::Context *context,
     const gl::InternalFormat &internalFormatInfo =
         gl::GetInternalFormatInfo(internalFormat, GL_UNSIGNED_BYTE);
 
-    mtl::Format mtlFormat(internalFormatInfo);
+    ContextMtl *contextMtl = mtl::GetImpl(context);
+    angle::FormatID angleFormatId =
+        angle::Format::InternalFormatToID(internalFormatInfo.sizedInternalFormat);
+    const mtl::Format &mtlFormat = contextMtl->getPixelFormat(angleFormatId);
 
     ANGLE_TRY(redefineImage(context, index, mtlFormat, newImageSize));
 
@@ -173,9 +223,13 @@ angle::Result TextureMtl::setStorage(const gl::Context *context,
                                      GLenum internalFormat,
                                      const gl::Extents &size)
 {
+    ContextMtl *contextMtl               = mtl::GetImpl(context);
     const gl::InternalFormat &formatInfo = gl::GetSizedInternalFormatInfo(internalFormat);
+    angle::FormatID angleFormatId =
+        angle::Format::InternalFormatToID(formatInfo.sizedInternalFormat);
+    const mtl::Format &mtlFormat = contextMtl->getPixelFormat(angleFormatId);
 
-    return setStorageImpl(context, type, mipmaps, mtl::Format(formatInfo), size);
+    return setStorageImpl(context, type, mipmaps, mtlFormat, size);
 }
 
 angle::Result TextureMtl::setStorageExternalMemory(const gl::Context *context,
@@ -266,15 +320,17 @@ angle::Result TextureMtl::releaseTexImage(const gl::Context *context)
 angle::Result TextureMtl::getAttachmentRenderTarget(const gl::Context *context,
                                                     GLenum binding,
                                                     const gl::ImageIndex &imageIndex,
+                                                    GLsizei samples,
                                                     FramebufferAttachmentRenderTarget **rtOut)
 {
+    // TODO(hqle): Support MSAA.
     // Non-zero mip level attachments are an ES 3.0 feature.
     ASSERT(imageIndex.getLevelIndex() == 0);
 
     ContextMtl *contextMtl = mtl::GetImpl(context);
     if (!mTexture)
     {
-        ANGLE_MTL_CHECK_WITH_ERR(contextMtl, false, GL_INVALID_OPERATION);
+        ANGLE_MTL_CHECK(contextMtl, false, GL_INVALID_OPERATION);
     }
 
     switch (imageIndex.getType())
@@ -364,7 +420,7 @@ angle::Result TextureMtl::redefineImage(const gl::Context *context,
             // Calculate the expected size for the index we are defining. If the size is different
             // from the given size, or the format is different, we are redefining the image so we
             // must release it.
-            if (mTexture->pixelFormat() != mtlFormat.metalFormat || size != mTexture->size(index) ||
+            if (mFormat != mtlFormat || size != mTexture->size(index) ||
                 mTexture->textureType() != mtl::GetTextureType(index.getType()))
             {
                 releaseTexture();
@@ -394,7 +450,7 @@ angle::Result TextureMtl::redefineImage(const gl::Context *context,
     return angle::Result::Continue;
 }
 
-// If levels = 0, this function will create full mipmaps texture.
+// If mipmaps = 0, this function will create full mipmaps texture.
 angle::Result TextureMtl::setStorageImpl(const gl::Context *context,
                                          gl::TextureType type,
                                          size_t mipmaps,
@@ -410,27 +466,24 @@ angle::Result TextureMtl::setStorageImpl(const gl::Context *context,
 
     MTLTextureType mtlType = mtl::GetTextureType(type);
 
-    auto convertedFormat = mtlFormat;
-    convertedFormat.convertToCompatibleFormatIfNotSupported(contextMtl->getMetalDevice());
-
     switch (mtlType)
     {
         case MTLTextureType2D:
-            ANGLE_TRY(mtl::Texture::Make2DTexture(
-                contextMtl, convertedFormat.metalFormat, size.width, size.height,
-                static_cast<uint32_t>(mipmaps), false, &mTexture));
+            ANGLE_TRY(mtl::Texture::Make2DTexture(contextMtl, mtlFormat, size.width, size.height,
+                                                  static_cast<uint32_t>(mipmaps), false,
+                                                  &mTexture));
 
             mLayeredRenderTargets.resize(1);
             mLayeredRenderTargets[0].set(mTexture, 0, 0, mFormat);
             break;
         case MTLTextureTypeCube:
-            ANGLE_TRY(mtl::Texture::MakeCubeTexture(contextMtl, convertedFormat.metalFormat,
-                                                    size.width, static_cast<uint32_t>(mipmaps),
-                                                    false, &mTexture));
+            ANGLE_TRY(mtl::Texture::MakeCubeTexture(contextMtl, mtlFormat, size.width,
+                                                    static_cast<uint32_t>(mipmaps), false,
+                                                    &mTexture));
 
             mLayeredRenderTargets.resize(gl::kCubeFaceCount);
             mLayeredTextureViews.resize(gl::kCubeFaceCount);
-            for (size_t f = 0; f < gl::kCubeFaceCount; ++f)
+            for (uint32_t f = 0; f < gl::kCubeFaceCount; ++f)
             {
                 mLayeredTextureViews[f] = mTexture->createFaceView(f);
                 mLayeredRenderTargets[f].set(mLayeredTextureViews[f], 0, 0, mFormat);
@@ -438,31 +491,30 @@ angle::Result TextureMtl::setStorageImpl(const gl::Context *context,
             break;
         default:
         {
-            ANGLE_MTL_CHECK_WITH_ERR(contextMtl, false, GL_INVALID_ENUM);
+            ANGLE_MTL_CHECK(contextMtl, false, GL_INVALID_ENUM);
         }
     }
 
-    mFormat                             = convertedFormat;
-    MTLColorWriteMask colorWritableMask = MTLColorWriteMaskAll;
-    const angle::Format &intendedFormat = angle::Format::Get(mFormat.intendedFormatId);
-    bool emulatedAlpha                  = false;
-    if (intendedFormat.alphaBits == 0)
-    {
-        emulatedAlpha = true;
-        // Disable alpha write to this texture
-        colorWritableMask = colorWritableMask & (~MTLColorWriteMaskAlpha);
-    }
+    mFormat = mtlFormat;
+
+    bool emulatedChannels               = false;
+    MTLColorWriteMask colorWritableMask = GetColorWriteMask(mtlFormat, &emulatedChannels);
     mTexture->setColorWritableMask(colorWritableMask);
 
-    // For emulated alpha texture, we need to initialize its alpha channel to one.
-    if (emulatedAlpha)
+    // For emulated channels that GL texture intends to not have,
+    // we need to initialize their content.
+    if (emulatedChannels)
     {
+        if (mipmaps == 0)
+        {
+            mipmaps = mTexture->mipmapLevels();
+        }
         int layers = mtlType == MTLTextureTypeCube ? 6 : 1;
         for (int layer = 0; layer < layers; ++layer)
         {
             auto cubeFace = static_cast<gl::TextureTarget>(
                 static_cast<int>(gl::TextureTarget::CubeMapPositiveX) + layer);
-            for (size_t mip = 0; mip < mipmaps; ++mip)
+            for (uint32_t mip = 0; mip < mipmaps; ++mip)
             {
                 gl::ImageIndex index;
                 if (layers > 1)
@@ -490,7 +542,10 @@ angle::Result TextureMtl::setImageImpl(const gl::Context *context,
                                        const gl::PixelUnpackState &unpack,
                                        const uint8_t *pixels)
 {
-    mtl::Format mtlFormat(formatInfo);
+    ContextMtl *contextMtl = mtl::GetImpl(context);
+    angle::FormatID angleFormatId =
+        angle::Format::InternalFormatToID(formatInfo.sizedInternalFormat);
+    const mtl::Format &mtlFormat = contextMtl->getPixelFormat(angleFormatId);
 
     ANGLE_TRY(redefineImage(context, index, mtlFormat, size));
 
@@ -521,11 +576,13 @@ angle::Result TextureMtl::setSubImageImpl(const gl::Context *context,
 
     ContextMtl *contextMtl = mtl::GetImpl(context);
 
-    mtl::Format mtlFormat(formatInfo);
+    angle::FormatID angleFormatId =
+        angle::Format::InternalFormatToID(formatInfo.sizedInternalFormat);
+    const mtl::Format &mtlFormat = contextMtl->getPixelFormat(angleFormatId);
 
     if (mFormat.metalFormat != mtlFormat.metalFormat)
     {
-        ANGLE_MTL_CHECK_WITH_ERR(contextMtl, false, GL_INVALID_OPERATION);
+        ANGLE_MTL_CHECK(contextMtl, false, GL_INVALID_OPERATION);
     }
 
     GLuint sourceRowPitch = 0;
@@ -539,7 +596,7 @@ angle::Result TextureMtl::setSubImageImpl(const gl::Context *context,
         gl::Extents size = mTexture->size(index);
         if (area.x != 0 || area.y != 0 || area.width != size.width || area.height != size.height)
         {
-            ANGLE_MTL_CHECK_WITH_ERR(contextMtl, false, GL_INVALID_OPERATION);
+            ANGLE_MTL_CHECK(contextMtl, false, GL_INVALID_OPERATION);
         }
     }
 
@@ -669,7 +726,6 @@ angle::Result TextureMtl::copySubImageWithDraw(const gl::Context *context,
         return angle::Result::Continue;
     }
 
-    const gl::InternalFormat &intendedInternalFormat = *mState.getImageDesc(index).format.info;
     mtl::RenderCommandEncoder *cmdEncoder = contextMtl->getRenderCommandEncoder(mTexture, index);
     UtilsMtl::BlitParams blitParams;
 
@@ -679,7 +735,7 @@ angle::Result TextureMtl::copySubImageWithDraw(const gl::Context *context,
     blitParams.src          = colorReadRT->getTexture();
     blitParams.srcRect      = clippedSourceArea;
     blitParams.srcYFlipped  = framebufferMtl->flipY();
-    blitParams.dstLuminance = intendedInternalFormat.isLUMA();
+    blitParams.dstLuminance = internalFormat.isLUMA();
 
     rendererMtl->getUtils().blitWithDraw(context, cmdEncoder, blitParams);
 
@@ -697,7 +753,7 @@ angle::Result TextureMtl::copySubImageCPU(const gl::Context *context,
     FramebufferMtl *framebufferMtl = mtl::GetImpl(source);
 
     const angle::Format &dstFormat = angle::Format::Get(mFormat.actualFormatId);
-    const size_t dstRowPitch       = dstFormat.pixelBytes * clippedSourceArea.width;
+    const int dstRowPitch          = dstFormat.pixelBytes * clippedSourceArea.width;
     std::unique_ptr<uint8_t[]> conversionRow(new (std::nothrow) uint8_t[dstRowPitch]);
     ANGLE_CHECK_GL_ALLOC(contextMtl, conversionRow);
 

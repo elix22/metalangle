@@ -3,6 +3,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
+// FramebufferMtl.mm:
+//    Implements the class methods for FramebufferMtl.
+//
 
 #include "libANGLE/renderer/metal/ContextMtl.h"
 
@@ -41,14 +44,8 @@ const gl::InternalFormat &GetReadAttachmentInfo(const gl::Context *context,
 }
 
 // FramebufferMtl implementation
-FramebufferMtl::FramebufferMtl(const gl::FramebufferState &state,
-                               SurfaceMtl *backBuffer,
-                               bool flipY,
-                               bool alwaysDiscard)
-    : FramebufferImpl(state),
-      mBackBuffer(backBuffer),
-      mAlwaysDiscardDepthStencil(alwaysDiscard),
-      mFlipY(flipY)
+FramebufferMtl::FramebufferMtl(const gl::FramebufferState &state, bool flipY, bool alwaysDiscard)
+    : FramebufferImpl(state), mAlwaysDiscardDepthStencil(alwaysDiscard), mFlipY(flipY)
 {
     reset();
 }
@@ -247,8 +244,6 @@ bool FramebufferMtl::checkStatus(const gl::Context *context) const
     }
 
 #if !ANGLE_MTL_ALLOW_SEPARATED_DEPTH_STENCIL
-    // On macos, packed depth stencil is required if both depth and stencil attachment
-    // are being used.
     if (mState.hasSeparateDepthAndStencilAttachments())
     {
         return false;
@@ -402,7 +397,8 @@ angle::Result FramebufferMtl::updateCachedRenderTarget(const gl::Context *contex
     if (attachment)
     {
         ASSERT(attachment->isAttached());
-        ANGLE_TRY(attachment->getRenderTarget(context, &newRenderTarget));
+        ANGLE_TRY(attachment->getRenderTarget(context, attachment->getRenderToTextureSamples(),
+                                              &newRenderTarget));
     }
     *cachedRenderTarget = newRenderTarget;
     return angle::Result::Continue;
@@ -414,7 +410,7 @@ angle::Result FramebufferMtl::prepareRenderPass(const gl::Context *context,
 {
     auto &desc = *pDescOut;
 
-    desc.numColorAttachments = drawColorBuffers.count();
+    desc.numColorAttachments = static_cast<uint32_t>(drawColorBuffers.count());
     size_t attachmentIdx     = 0;
 
     for (size_t colorIndexGL : drawColorBuffers)
@@ -428,19 +424,19 @@ angle::Result FramebufferMtl::prepareRenderPass(const gl::Context *context,
 
         mtl::RenderPassColorAttachmentDesc &colorAttachment =
             desc.colorAttachments[attachmentIdx++];
-        colorAttachment.set();
+        colorAttachment.reset();
         colorRenderTarget->toRenderPassAttachmentDesc(&colorAttachment);
     }
 
     if (mDepthRenderTarget)
     {
-        desc.depthAttachment.set();
+        desc.depthAttachment.reset();
         mDepthRenderTarget->toRenderPassAttachmentDesc(&desc.depthAttachment);
     }
 
     if (mStencilRenderTarget)
     {
-        desc.stencilAttachment.set();
+        desc.stencilAttachment.reset();
         mStencilRenderTarget->toRenderPassAttachmentDesc(&desc.stencilAttachment);
     }
 
@@ -474,7 +470,7 @@ angle::Result FramebufferMtl::clearWithLoadOp(const gl::Context *context,
     {
         ASSERT(colorIndexGL < kMaxRenderTargets);
 
-        auto attachmentIdx = attachmentCount++;
+        uint32_t attachmentIdx = static_cast<uint32_t>(attachmentCount++);
         mtl::RenderPassColorAttachmentDesc &colorAttachment =
             tempDesc.colorAttachments[attachmentIdx];
         mtl::TextureRef texture = colorAttachment.texture;
@@ -687,7 +683,7 @@ angle::Result FramebufferMtl::readPixelsImpl(const gl::Context *context,
     if (packPixelsParams.packBuffer)
     {
         // TODO(hqle): PBO is not supported atm
-        ANGLE_MTL_CHECK_WITH_ERR(contextMtl, false, GL_INVALID_OPERATION);
+        ANGLE_MTL_CHECK(contextMtl, false, GL_INVALID_OPERATION);
     }
     if (!renderTarget)
     {
@@ -704,7 +700,7 @@ angle::Result FramebufferMtl::readPixelsImpl(const gl::Context *context,
     const angle::Format &readAngleFormat = readFormat.actualAngleFormat();
 
     // TODO(hqle): resolve MSAA texture before readback
-    size_t srcRowPitch      = area.width * readAngleFormat.pixelBytes;
+    int srcRowPitch         = area.width * readAngleFormat.pixelBytes;
     auto readPixelRowBuffer = new (std::nothrow) uint8_t[srcRowPitch];
 
     ANGLE_CHECK_GL_ALLOC(contextMtl, readPixelRowBuffer);
@@ -712,32 +708,21 @@ angle::Result FramebufferMtl::readPixelsImpl(const gl::Context *context,
     auto packPixelsRowParams  = packPixelsParams;
     MTLRegion mtlSrcRowRegion = MTLRegionMake2D(area.x, area.y, area.width, 1);
 
-    NSInteger rowOffset = packPixelsParams.reverseRowOrder ? -1 : 1;
-    NSUInteger startRow = packPixelsParams.reverseRowOrder ? (area.y1() - 1) : area.y;
-
-    // Make sure GPU & CPU contents are synchronized
-    if (texture->isCPUReadMemDirty())
-    {
-        mtl::BlitCommandEncoder *blitEncoder = contextMtl->getBlitCommandEncoder();
-        if (blitEncoder)
-        {
-            blitEncoder->synchronizeResource(texture);
-        }
-        texture->resetCPUReadMemDirty();
-    }
+    int rowOffset = packPixelsParams.reverseRowOrder ? -1 : 1;
+    int startRow  = packPixelsParams.reverseRowOrder ? (area.y1() - 1) : area.y;
 
     // Copy pixels row by row
     packPixelsRowParams.area.height     = 1;
     packPixelsRowParams.reverseRowOrder = false;
-    for (NSUInteger r = startRow, i = 0; i < static_cast<NSUInteger>(area.height);
+    for (int r = startRow, i = 0; i < area.height;
          ++i, r += rowOffset, pixels += packPixelsRowParams.outputPitch)
     {
         mtlSrcRowRegion.origin.y   = r;
         packPixelsRowParams.area.y = packPixelsParams.area.y + i;
 
         // Read the pixels data to the row buffer
-        texture->getBytes(contextMtl, srcRowPitch, mtlSrcRowRegion, renderTarget->getLevelIndex(),
-                          readPixelRowBuffer);
+        texture->getBytes(contextMtl, srcRowPitch, mtlSrcRowRegion,
+                          static_cast<uint32_t>(renderTarget->getLevelIndex()), readPixelRowBuffer);
 
         // Convert to destination format
         PackPixels(packPixelsRowParams, readAngleFormat, srcRowPitch, readPixelRowBuffer, pixels);

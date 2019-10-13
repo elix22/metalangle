@@ -3,6 +3,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
+// mtl_resources.mm:
+//    Implements wrapper classes for Metal's MTLTexture and MTLBuffer.
+//
 
 #include "libANGLE/renderer/metal/mtl_resources.h"
 
@@ -21,7 +24,34 @@ namespace rx
 {
 namespace mtl
 {
-
+namespace
+{
+void SetTextureSwizzle(ContextMtl *context,
+                       const Format &format,
+                       MTLTextureDescriptor *textureDescOut)
+{
+#if TARGET_OS_OSX && defined(__MAC_10_15)
+    if (@available(macOS 10.15, *))
+    {
+        if ([context->getMetalDevice() supportsFamily:MTLGPUFamilyMac2])
+        {
+            // Work around Metal doesn't have native support for DXT1 without alpha.
+            switch (format.intendedFormatId)
+            {
+                case angle::FormatID::BC1_RGB_UNORM_BLOCK:
+                case angle::FormatID::BC1_RGB_UNORM_SRGB_BLOCK:
+                    textureDescOut.swizzle =
+                        MTLTextureSwizzleChannelsMake(MTLTextureSwizzleRed, MTLTextureSwizzleGreen,
+                                                      MTLTextureSwizzleBlue, MTLTextureSwizzleOne);
+                    break;
+                default:
+                    break;
+            }
+        }
+    }
+#endif
+}
+}  // namespace
 // Resource implementation
 Resource::Resource() : mRef(std::make_shared<Ref>()) {}
 
@@ -59,7 +89,7 @@ void Resource::setUsedByCommandBufferWithQueueSerial(uint64_t serial, bool writi
 // Texture implemenetation
 /** static */
 angle::Result Texture::Make2DTexture(ContextMtl *context,
-                                     MTLPixelFormat format,
+                                     const Format &format,
                                      uint32_t width,
                                      uint32_t height,
                                      uint32_t mips,
@@ -69,17 +99,18 @@ angle::Result Texture::Make2DTexture(ContextMtl *context,
     ANGLE_MTL_OBJC_SCOPE
     {
         MTLTextureDescriptor *desc =
-            [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:format
+            [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:format.metalFormat
                                                                width:width
                                                               height:height
                                                            mipmapped:mips == 0 || mips > 1];
 
+        SetTextureSwizzle(context, format, desc);
         refOut->reset(new Texture(context, desc, mips, renderTargetOnly, false));
     }  // ANGLE_MTL_OBJC_SCOPE
 
     if (!refOut || !refOut->get())
     {
-        ANGLE_MTL_CHECK_WITH_ERR(context, false, GL_OUT_OF_MEMORY);
+        ANGLE_MTL_CHECK(context, false, GL_OUT_OF_MEMORY);
     }
 
     return angle::Result::Continue;
@@ -87,7 +118,7 @@ angle::Result Texture::Make2DTexture(ContextMtl *context,
 
 /** static */
 angle::Result Texture::MakeCubeTexture(ContextMtl *context,
-                                       MTLPixelFormat format,
+                                       const Format &format,
                                        uint32_t size,
                                        uint32_t mips,
                                        bool renderTargetOnly,
@@ -96,16 +127,16 @@ angle::Result Texture::MakeCubeTexture(ContextMtl *context,
     ANGLE_MTL_OBJC_SCOPE
     {
         MTLTextureDescriptor *desc =
-            [MTLTextureDescriptor textureCubeDescriptorWithPixelFormat:format
+            [MTLTextureDescriptor textureCubeDescriptorWithPixelFormat:format.metalFormat
                                                                   size:size
                                                              mipmapped:mips == 0 || mips > 1];
-
+        SetTextureSwizzle(context, format, desc);
         refOut->reset(new Texture(context, desc, mips, renderTargetOnly, true));
     }  // ANGLE_MTL_OBJC_SCOPE
 
     if (!refOut || !refOut->get())
     {
-        ANGLE_MTL_CHECK_WITH_ERR(context, false, GL_OUT_OF_MEMORY);
+        ANGLE_MTL_CHECK(context, false, GL_OUT_OF_MEMORY);
     }
 
     return angle::Result::Continue;
@@ -172,6 +203,22 @@ Texture::Texture(Texture *original, MTLTextureType type, NSRange mipmapLevelRang
     set(view);
 }
 
+void Texture::syncContent(ContextMtl *context)
+{
+#if TARGET_OS_OSX
+    // Make sure GPU & CPU contents are synchronized
+    if (this->isCPUReadMemDirty())
+    {
+        mtl::BlitCommandEncoder *blitEncoder = context->getBlitCommandEncoder();
+        if (blitEncoder)
+        {
+            blitEncoder->synchronizeResource(shared_from_this());
+        }
+        this->resetCPUReadMemDirty();
+    }
+#endif
+}
+
 void Texture::replaceRegion(ContextMtl *context,
                             MTLRegion region,
                             uint32_t mipmapLevel,
@@ -180,6 +227,8 @@ void Texture::replaceRegion(ContextMtl *context,
                             size_t bytesPerRow)
 {
     CommandQueue &cmdQueue = context->cmdQueue();
+
+    syncContent(context);
 
     // TODO(hqle): what if multiple contexts on multiple threads are using this texture?
     if (this->isBeingUsedByGPU(context))
@@ -204,6 +253,8 @@ void Texture::getBytes(ContextMtl *context,
                        uint8_t *dataOut)
 {
     CommandQueue &cmdQueue = context->cmdQueue();
+
+    syncContent(context);
 
     // TODO(hqle): what if multiple contexts on multiple threads are using this texture?
     if (this->isBeingUsedByGPU(context))
@@ -290,7 +341,7 @@ angle::Result Buffer::MakeBuffer(ContextMtl *context,
 
     if (!bufferOut || !bufferOut->get())
     {
-        ANGLE_MTL_CHECK_WITH_ERR(context, false, GL_OUT_OF_MEMORY);
+        ANGLE_MTL_CHECK(context, false, GL_OUT_OF_MEMORY);
     }
 
     return angle::Result::Continue;
@@ -348,158 +399,6 @@ void Buffer::unmap(ContextMtl *context) {}
 size_t Buffer::size() const
 {
     return get().length;
-}
-
-// StreamBuffer implementation
-StreamBuffer::StreamBuffer(bool useClientBuffer) : mUseShadowCopy(useClientBuffer) {}
-
-StreamBuffer::~StreamBuffer() {}
-
-angle::Result StreamBuffer::initialize(ContextMtl *context,
-                                       size_t bufferSize,
-                                       size_t queueSize,
-                                       const uint8_t *data)
-
-{
-    destroy();
-
-    angle::Result re = initializeImpl(context, bufferSize, queueSize, data);
-    if (angle::Result::Continue != re)
-    {
-        destroy();
-    }
-    return re;
-}
-
-angle::Result StreamBuffer::initializeImpl(ContextMtl *context,
-                                           size_t bufferSize,
-                                           size_t queueSize,
-                                           const uint8_t *data)
-{
-    mBufferSize = bufferSize;
-
-    if (mUseShadowCopy)
-    {
-        ANGLE_MTL_CHECK_WITH_ERR(context, mShadowCopy.resize(bufferSize), GL_OUT_OF_MEMORY);
-        if (data)
-        {
-            std::copy(data, data + bufferSize, mShadowCopy.data());
-        }
-    }
-
-    mBuffersQueue.resize(queueSize);
-    for (auto &buffer : mBuffersQueue)
-    {
-        ANGLE_TRY(Buffer::MakeBuffer(context, bufferSize, data, &buffer));
-    }
-
-    mValid = true;
-
-    return angle::Result::Continue;
-}
-
-void StreamBuffer::destroy()
-{
-    mBuffersQueue.clear();
-    mShadowCopy.resize(0);
-    mCurrentBufferIdx = 0;
-    mBufferSize       = 0;
-    mValid            = false;
-}
-
-uint8_t *StreamBuffer::data()
-{
-    if (!mUseShadowCopy)
-    {
-        return nullptr;
-    }
-    return mShadowCopy.data();
-}
-
-const uint8_t *StreamBuffer::data() const
-{
-    if (!mUseShadowCopy)
-    {
-        return nullptr;
-    }
-    return mShadowCopy.data();
-}
-
-BufferRef StreamBuffer::commit(ContextMtl *context)
-{
-    return commit(context, mUseShadowCopy ? mShadowCopy.data() : nullptr);
-}
-
-BufferRef StreamBuffer::commit(ContextMtl *context, const uint8_t *data)
-{
-    auto buffer = prepareBuffer(context);
-    if (!buffer)
-    {
-        return nullptr;
-    }
-
-    if (data)
-    {
-        // Commit data to buffer
-        std::copy(data, data + mBufferSize, buffer->map(context));
-        buffer->unmap(context);
-
-        if (mUseShadowCopy && mShadowCopy.data() != data)
-        {
-            std::copy(data, data + mBufferSize, mShadowCopy.data());
-        }
-    }
-
-    return buffer;
-}
-
-BufferRef StreamBuffer::prepareBuffer(ContextMtl *context)
-{
-    auto queueSize = mBuffersQueue.size();
-    if (!queueSize)
-    {
-        return nullptr;
-    }
-
-    CommandQueue &cmdQueue = context->cmdQueue();
-    BufferRef buffer       = nullptr;
-    const auto currentIdx  = mCurrentBufferIdx;
-    do
-    {
-        auto &buf = mBuffersQueue[mCurrentBufferIdx];
-        if (buf->isBeingUsedByGPU(context))
-        {
-            // if GPU is using this buffer, move to next buffer
-            mCurrentBufferIdx = (mCurrentBufferIdx + 1) % queueSize;
-        }
-        else
-        {
-            buffer = buf;
-        }
-
-    } while (!buffer && currentIdx != mCurrentBufferIdx);
-
-    if (!buffer)
-    {
-        // No buffer is currently usable.
-        // Wait until GPU finishes its operation
-        buffer = mBuffersQueue[mCurrentBufferIdx];
-
-        // TODO(hqle): what if multiple contexts on multiple threads are using this buffer?
-        context->flushCommandBufer();
-        cmdQueue.ensureResourceReadyForCPU(buffer);
-    }
-
-    return buffer;
-}
-
-BufferRef StreamBuffer::getCurrentBuffer(ContextMtl *context)
-{
-    if (!mBuffersQueue.size())
-    {
-        return nullptr;
-    }
-    return mBuffersQueue[mCurrentBufferIdx];
 }
 }
 }

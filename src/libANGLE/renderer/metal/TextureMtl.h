@@ -4,7 +4,7 @@
 // found in the LICENSE file.
 //
 // TextureMtl.h:
-//    Defines the class interface for TextureVk, implementing TextureImpl.
+//    Defines the class interface for TextureMtl, implementing TextureImpl.
 //
 
 #ifndef LIBANGLE_RENDERER_METAL_TEXTUREMTL_H_
@@ -124,6 +124,7 @@ class TextureMtl : public TextureImpl
     angle::Result getAttachmentRenderTarget(const gl::Context *context,
                                             GLenum binding,
                                             const gl::ImageIndex &imageIndex,
+                                            GLsizei samples,
                                             FramebufferAttachmentRenderTarget **rtOut) override;
 
     angle::Result syncState(const gl::Context *context,

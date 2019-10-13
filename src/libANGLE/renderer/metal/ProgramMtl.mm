@@ -3,6 +3,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
+// ProgramMtl.mm:
+//    Implements the class methods for ProgramMtl.
+//
 
 #include "libANGLE/renderer/metal/ProgramMtl.h"
 
@@ -63,17 +66,41 @@ angle::Result BindResources2(spirv_cross::CompilerMSL *compiler,
                 compilerMsl.get_decoration(resource.id, spv::DecorationDescriptorSet);
         }
 
-        if (resBinding.desc_set != 0 ||
-            !compilerMsl.has_decoration(resource.id, spv::DecorationBinding))
+        if (!compilerMsl.has_decoration(resource.id, spv::DecorationBinding))
         {
             continue;
         }
 
-        resBinding.binding        = compilerMsl.get_decoration(resource.id, spv::DecorationBinding);
-        resBinding.*bindingField1 = resBinding.binding;
+        resBinding.binding = compilerMsl.get_decoration(resource.id, spv::DecorationBinding);
+
+        uint32_t bindingPoint;
+        // TODO(hqle): We use separate discrete binding point for now, in future, we should use
+        // one argument buffer for each descriptor set.
+        switch (resBinding.desc_set)
+        {
+            case 0:
+                // Use resBinding.binding as binding point.
+                bindingPoint = resBinding.binding;
+                break;
+            case kDriverUniformsBindingIndex:
+                bindingPoint = kDriverUniformsBindingIndex;
+                break;
+            case kDefaultUniformsBindingIndex:
+                // TODO(hqle): Properly handle transform feedbacks and UBO binding once ES 3.0 is
+                // implemented.
+                bindingPoint = kDefaultUniformsBindingIndex;
+                break;
+            default:
+                // We don't support this descriptor set.
+                continue;
+        }
+
+        // bindingField can be buffer or texture, which will be translated to [[buffer(d)]] or
+        // [[texture(d)]]
+        resBinding.*bindingField1 = bindingPoint;
         if (bindingField1 != bindingField2)
         {
-            resBinding.*bindingField2 = resBinding.binding;
+            resBinding.*bindingField2 = bindingPoint;
         }
 
         compilerMsl.add_msl_resource_binding(resBinding);
@@ -275,8 +302,7 @@ std::unique_ptr<LinkEvent> ProgramMtl::link(const gl::Context *context,
     // assignment done in that function.
     linkResources(resources);
 
-    GlslangWrapperMtl::GetShaderSource(mState, resources, &mShaderSource[gl::ShaderType::Vertex],
-                                       &mShaderSource[gl::ShaderType::Fragment]);
+    GlslangWrapperMtl::GetShaderSource(mState, resources, &mShaderSource);
 
     // TODO(hqle): Parallelize linking.
     return std::make_unique<LinkEventDone>(linkImpl(context, infoLog));
@@ -292,15 +318,15 @@ angle::Result ProgramMtl::linkImpl(const gl::Context *glContext, gl::InfoLog &in
     ANGLE_TRY(initDefaultUniformBlocks(glContext));
 
     // Convert GLSL to spirv code
-    std::vector<uint32_t> vertexCode;
-    std::vector<uint32_t> fragmentCode;
-    ANGLE_TRY(GlslangWrapperMtl::GetShaderCode(
-        contextMtl, contextMtl->getCaps(), false, mShaderSource[gl::ShaderType::Vertex],
-        mShaderSource[gl::ShaderType::Fragment], &vertexCode, &fragmentCode));
+    gl::ShaderMap<std::vector<uint32_t>> shaderCodes;
+    ANGLE_TRY(GlslangWrapperMtl::GetShaderCode(contextMtl, contextMtl->getCaps(), false,
+                                               mShaderSource, &shaderCodes));
 
     // Convert spirv code to MSL
-    ANGLE_TRY(convertToMsl(glContext, gl::ShaderType::Vertex, infoLog, &vertexCode));
-    ANGLE_TRY(convertToMsl(glContext, gl::ShaderType::Fragment, infoLog, &fragmentCode));
+    ANGLE_TRY(convertToMsl(glContext, gl::ShaderType::Vertex, infoLog,
+                           &shaderCodes[gl::ShaderType::Vertex]));
+    ANGLE_TRY(convertToMsl(glContext, gl::ShaderType::Fragment, infoLog,
+                           &shaderCodes[gl::ShaderType::Fragment]));
 
     return angle::Result::Continue;
 }
@@ -384,7 +410,7 @@ angle::Result ProgramMtl::initDefaultUniformBlocks(const gl::Context *glContext)
             if (!mDefaultUniformBlocks[shaderType].uniformData.resize(
                     requiredBufferSize[shaderType]))
             {
-                ANGLE_MTL_CHECK_WITH_ERR(contextMtl, false, GL_OUT_OF_MEMORY);
+                ANGLE_MTL_CHECK(contextMtl, false, GL_OUT_OF_MEMORY);
             }
 
             // Initialize uniform buffer memory to zero by default.
@@ -434,14 +460,14 @@ angle::Result ProgramMtl::convertToMsl(const gl::Context *glContext,
     auto bindingErr = BindResources2<&spirv_cross::MSLResourceBinding::msl_sampler,
                                      &spirv_cross::MSLResourceBinding::msl_texture>(
         &compilerMsl, mslRes.sampled_images, shaderType);
-    ANGLE_MTL_CHECK(contextMtl, !IsError(bindingErr));
+    ANGLE_MTL_TRY(contextMtl, !IsError(bindingErr));
 
     // TODO(hqle): spirv-cross uses exceptions to report error, what should we do here
     // in case of error?
     std::string translatedMsl = compilerMsl.compile();
     if (translatedMsl.size() == 0)
     {
-        ANGLE_MTL_CHECK_WITH_ERR(contextMtl, false, GL_INVALID_OPERATION);
+        ANGLE_MTL_CHECK(contextMtl, false, GL_INVALID_OPERATION);
     }
 
     // Create actual Metal shader
@@ -475,7 +501,7 @@ angle::Result ProgramMtl::createMslShader(const gl::Context *glContext,
 
             infoLog << ss.str();
 
-            ANGLE_MTL_CHECK_WITH_ERR(contextMtl, false, GL_INVALID_OPERATION);
+            ANGLE_MTL_CHECK(contextMtl, false, GL_INVALID_OPERATION);
         }
 
         auto mtlShader = [mtlShaderLib.get() newFunctionWithName:SHADER_ENTRY_NAME];
@@ -507,7 +533,8 @@ void ProgramMtl::setUniformImpl(GLint location, GLsizei count, const T *v, GLenu
 
     if (linkedUniform.isSampler())
     {
-        // We already handle this in super class
+        // Sampler binding has changed.
+        mSamplerBindingsDirty.set();
         return;
     }
 
@@ -677,17 +704,11 @@ void ProgramMtl::setUniformMatrixfv(GLint location,
             continue;
         }
 
-        bool updated = SetFloatUniformMatrixGLSL<cols, rows>(
+        SetFloatUniformMatrixGLSL<cols, rows>::Run(
             locationInfo.arrayIndex, linkedUniform.getArraySizeProduct(), count, transpose, value,
             uniformBlock.uniformData.data() + layoutInfo.offset);
 
-        // If the uniformsDirty flag was true, we don't want to flip it to false here if the
-        // setter did not update any data. We still want the uniform to be included when we'll
-        // update the descriptor sets.
-        if (updated)
-        {
-            mDefaultUniformBlocksDirty.set(shaderType);
-        }
+        mDefaultUniformBlocksDirty.set(shaderType);
     }
 }
 

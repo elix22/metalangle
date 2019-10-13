@@ -3,11 +3,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
+// ContextMtl.h:
+//    Defines the class interface for ContextMtl, implementing ContextImpl.
+//
 
 #ifndef LIBANGLE_RENDERER_METAL_CONTEXTMTL_H_
 #define LIBANGLE_RENDERER_METAL_CONTEXTMTL_H_
 
-#include "libANGLE/renderer/metal/Metal_platform.h"
+#import <Metal/Metal.h>
 
 #include "common/Optional.h"
 #include "libANGLE/Context.h"
@@ -48,6 +51,12 @@ class ContextMtl : public ContextImpl, public mtl::Context
                                       GLint first,
                                       GLsizei count,
                                       GLsizei instanceCount) override;
+    angle::Result drawArraysInstancedBaseInstance(const gl::Context *context,
+                                                  gl::PrimitiveMode mode,
+                                                  GLint first,
+                                                  GLsizei count,
+                                                  GLsizei instanceCount,
+                                                  GLuint baseInstance) override;
 
     angle::Result drawElements(const gl::Context *context,
                                gl::PrimitiveMode mode,
@@ -60,6 +69,14 @@ class ContextMtl : public ContextImpl, public mtl::Context
                                         gl::DrawElementsType type,
                                         const void *indices,
                                         GLsizei instanceCount) override;
+    angle::Result drawElementsInstancedBaseVertexBaseInstance(const gl::Context *context,
+                                                              gl::PrimitiveMode mode,
+                                                              GLsizei count,
+                                                              gl::DrawElementsType type,
+                                                              const void *indices,
+                                                              GLsizei instances,
+                                                              GLint baseVertex,
+                                                              GLuint baseInstance) override;
     angle::Result drawRangeElements(const gl::Context *context,
                                     gl::PrimitiveMode mode,
                                     GLuint start,
@@ -154,6 +171,9 @@ class ContextMtl : public ContextImpl, public mtl::Context
     // Semaphore creation.
     SemaphoreImpl *createSemaphore() override;
 
+    // Overlay creation.
+    OverlayImpl *createOverlay(const gl::OverlayState &state) override;
+
     angle::Result dispatchCompute(const gl::Context *context,
                                   GLuint numGroupsX,
                                   GLuint numGroupsY,
@@ -192,6 +212,11 @@ class ContextMtl : public ContextImpl, public mtl::Context
     // Return front facing stencil write mask
     uint32_t getStencilMask() const;
     bool isDepthWriteEnabled() const;
+
+    const mtl::Format &getPixelFormat(angle::FormatID angleFormatId) const;
+    // See mtl::FormatTable::getVertexFormat()
+    const mtl::VertexFormat &getVertexFormat(angle::FormatID angleFormatId,
+                                             bool tightlyPacked) const;
 
     // Recommended to call these methods to end encoding instead of invoking the encoder's
     // endEncoding() directly.
@@ -236,9 +261,6 @@ class ContextMtl : public ContextImpl, public mtl::Context
     mtl::ComputeCommandEncoder *getComputeCommandEncoder();
 
   private:
-    void initializeCaps() const;
-    void initializeExtensions() const;
-    void initializeTextureCaps() const;
     void ensureCommandBufferValid();
     angle::Result setupDraw(const gl::Context *context,
                             gl::PrimitiveMode mode,
@@ -315,11 +337,6 @@ class ContextMtl : public ContextImpl, public mtl::Context
     MTLCullMode mCullMode;
     bool mCullAllPolygons = false;
 
-    mutable gl::TextureCapsMap mNativeTextureCaps;
-    mutable gl::Extensions mNativeExtensions;
-    mutable gl::Caps mNativeCaps;
-    mutable bool mCapsInitialized = false;
-
     // See compiler/translator/TranslatorVulkan.cpp: AddDriverUniformsToShader()
     struct DriverUniforms
     {
@@ -328,9 +345,12 @@ class ContextMtl : public ContextImpl, public mtl::Context
         float halfRenderAreaHeight;
         float viewportYScale;
         float negViewportYScale;
+
+        // TODO(hqle): Transform feedsback is not supported yet.
         uint32_t xfbActiveUnpaused;
 
         int32_t xfbBufferOffsets[4];
+        uint32_t acbBufferOffsets[4];
 
         // We'll use x, y, z for near / far / diff respectively.
         float depthRange[4];

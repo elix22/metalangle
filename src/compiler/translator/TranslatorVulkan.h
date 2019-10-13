@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2016 The ANGLE Project Authors. All rights reserved.
+// Copyright 2016 The ANGLE Project Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -17,23 +17,25 @@
 namespace sh
 {
 
+class TOutputVulkanGLSL;
+
 class TranslatorVulkan : public TCompiler
 {
   public:
     TranslatorVulkan(sh::GLenum type, ShShaderSpec spec);
 
   protected:
-    TranslatorVulkan(sh::GLenum type,
-                     ShShaderSpec spec,
-                     bool scalePositionY /* use viewportScaleY to scale gl_Position.y */);
-
-    void translate(TIntermBlock *root,
-                   ShCompileOptions compileOptions,
-                   PerformanceDiagnostics *perfDiagnostics) override;
+    ANGLE_NO_DISCARD bool translate(TIntermBlock *root,
+                                    ShCompileOptions compileOptions,
+                                    PerformanceDiagnostics *perfDiagnostics) override;
     bool shouldFlattenPragmaStdglInvariantAll() override;
 
-  private:
-    const bool mScalePositionY;
+    TIntermBinary *getDriverUniformNegViewportYScaleRef(const TVariable *driverUniforms) const;
+    ANGLE_NO_DISCARD bool preWriting(TIntermBlock *root,
+                                     ShCompileOptions compileOptions,
+                                     PerformanceDiagnostics *perfDiagnostics,
+                                     const TVariable **driverUniformsOut,
+                                     TOutputVulkanGLSL *outputGLSL);
 };
 
 }  // namespace sh

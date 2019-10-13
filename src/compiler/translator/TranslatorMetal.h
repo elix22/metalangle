@@ -12,22 +12,20 @@
 #ifndef LIBANGLE_RENDERER_METAL_TRANSLATORMETAL_H_
 #define LIBANGLE_RENDERER_METAL_TRANSLATORMETAL_H_
 
-#include "compiler/translator/Compiler.h"
+#include "compiler/translator/TranslatorVulkan.h"
 
 namespace sh
 {
 
-class TranslatorMetal : public TCompiler
+class TranslatorMetal : public TranslatorVulkan
 {
   public:
     TranslatorMetal(sh::GLenum type, ShShaderSpec spec);
 
   protected:
-    void translate(TIntermBlock *root,
-                   ShCompileOptions compileOptions,
-                   PerformanceDiagnostics *perfDiagnostics) override;
-
-    bool shouldFlattenPragmaStdglInvariantAll() override;
+    ANGLE_NO_DISCARD bool translate(TIntermBlock *root,
+                                    ShCompileOptions compileOptions,
+                                    PerformanceDiagnostics *perfDiagnostics) override;
 };
 
 }  // namespace sh

@@ -3,6 +3,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
+// mtl_utils.mm:
+//    Implements utilities functions that create Metal shaders, convert from angle enums
+//    to Metal enums and so on.
+//
 
 #include "libANGLE/renderer/metal/mtl_utils.h"
 
@@ -92,7 +96,7 @@ MTLViewport GetViewport(const gl::Rectangle &rect, double znear, double zfar)
 }
 
 MTLViewport GetViewportFlipY(const gl::Rectangle &rect,
-                             double screenHeight,
+                             NSUInteger screenHeight,
                              double znear,
                              double zfar)
 {
@@ -109,7 +113,7 @@ MTLViewport GetViewportFlipY(const gl::Rectangle &rect,
 }
 
 MTLViewport GetViewport(const gl::Rectangle &rect,
-                        double screenHeight,
+                        NSUInteger screenHeight,
                         bool flipY,
                         double znear,
                         double zfar)
@@ -122,7 +126,7 @@ MTLViewport GetViewport(const gl::Rectangle &rect,
     return GetViewport(rect, znear, zfar);
 }
 
-MTLScissorRect GetScissorRect(const gl::Rectangle &rect, double screenHeight, bool flipY)
+MTLScissorRect GetScissorRect(const gl::Rectangle &rect, NSUInteger screenHeight, bool flipY)
 {
     MTLScissorRect re;
 
@@ -417,27 +421,8 @@ bool IsPolygonPrimitiveType(gl::PrimitiveMode mode)
 #if ANGLE_MTL_PRIMITIVE_TOPOLOGY_CLASS_AVAILABLE
 PrimitiveTopologyClass GetPrimitiveTopologyClass(gl::PrimitiveMode mode)
 {
-    switch (mode)
-    {
-        case gl::PrimitiveMode::Points:
-            return MTLPrimitiveTopologyClassPoint;
-        case gl::PrimitiveMode::Lines:
-        case gl::PrimitiveMode::LineStrip:
-        case gl::PrimitiveMode::LineLoop:
-        case gl::PrimitiveMode::LinesAdjacency:
-        case gl::PrimitiveMode::LineStripAdjacency:
-            return MTLPrimitiveTopologyClassLine;
-        case gl::PrimitiveMode::TriangleStrip:
-        case gl::PrimitiveMode::TriangleFan:
-        case gl::PrimitiveMode::Triangles:
-        case gl::PrimitiveMode::TrianglesAdjacency:
-        case gl::PrimitiveMode::TriangleStripAdjacency:
-            return MTLPrimitiveTopologyClassTriangle;
-        default:
-            break;
-    }
-
-    UNREACHABLE();
+    // TODO(hqle): Support layered renderring in future.
+    // In non-layered rendering mode, unspecified is enough.
     return MTLPrimitiveTopologyClassUnspecified;
 }
 #else  // ANGLE_MTL_PRIMITIVE_TOPOLOGY_CLASS_AVAILABLE
@@ -496,31 +481,6 @@ MTLClearColor EmulatedAlphaClearColor(MTLClearColor color, MTLColorWriteMask col
 
     return re;
 }
-
-#if !__has_feature(objc_arc)
-AutoReleasePoolRef InitAutoreleasePool(AutoReleasePoolRef *poolInOut)
-{
-    if (*poolInOut)
-    {
-        return *poolInOut;
-    }
-    NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
-
-    return *poolInOut = (__bridge void *)pool;
-}
-void ReleaseAutoreleasePool(AutoReleasePoolRef *poolInOut)
-{
-    auto &pool = *poolInOut;
-    if (!pool)
-    {
-        return;
-    }
-    NSAutoreleasePool *arpool = (__bridge NSAutoreleasePool *)pool;
-
-    [arpool release];
-    pool = nullptr;
-}
-#endif  // #if !__has_feature(objc_arc)
 
 }  // namespace mtl
 }  // namespace rx

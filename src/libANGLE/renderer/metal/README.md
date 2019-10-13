@@ -11,4 +11,4 @@ Otherwise, a CPU conversion will take place.
 Otherwise, a CPU conversion will take place.
 - ~~indices offset passed to glDrawElements() must be multiple of 4 bytes.
 Otherwise, a CPU conversion will take place.~~
-- Only support iOS 11.0+.
+- Only support iOS 11.0+ vs MacOS 10.13+.
