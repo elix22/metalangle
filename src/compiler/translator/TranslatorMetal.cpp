@@ -5,10 +5,11 @@
 //
 // TranslatorMetal:
 //   A GLSL-based translator that outputs shaders that fit GL_KHR_vulkan_glsl.
+//   It takes into account some considerations for Metal backend also.
 //   The shaders are then fed into glslang to spit out SPIR-V (libANGLE-side).
 //   See: https://www.khronos.org/registry/vulkan/specs/misc/GL_KHR_vulkan_glsl.txt
 //
-//  The SPIR-V will then be translated to Metal Shading Language later in Metal backend.
+//   The SPIR-V will then be translated to Metal Shading Language later in Metal backend.
 //
 
 #include "compiler/translator/TranslatorMetal.h"
