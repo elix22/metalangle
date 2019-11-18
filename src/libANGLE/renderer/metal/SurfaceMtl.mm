@@ -274,7 +274,7 @@ egl::Error SurfaceMtl::initialize(const egl::Display *display)
 FramebufferImpl *SurfaceMtl::createDefaultFramebuffer(const gl::Context *context,
                                                       const gl::FramebufferState &state)
 {
-    auto fbo = new FramebufferMtl(state, /* flipY */ true, /* alwaysDiscard */ true);
+    auto fbo = new FramebufferMtl(state, /* flipY */ true, /* isDefault */ true);
 
     return fbo;
 }
@@ -340,7 +340,12 @@ egl::Error SurfaceMtl::getSyncValues(EGLuint64KHR *ust, EGLuint64KHR *msc, EGLui
     return egl::EglBadAccess();
 }
 
-void SurfaceMtl::setSwapInterval(EGLint interval) {}
+void SurfaceMtl::setSwapInterval(EGLint interval)
+{
+#if TARGET_OS_OSX || TARGET_OS_MACCATALYST
+    mMetalLayer.get().displaySyncEnabled = interval != 0;
+#endif
+}
 
 void SurfaceMtl::setFixedWidth(EGLint width)
 {

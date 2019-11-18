@@ -676,6 +676,20 @@ RenderCommandEncoder &RenderCommandEncoder::draw(MTLPrimitiveType primitiveType,
 
     return *this;
 }
+
+RenderCommandEncoder &RenderCommandEncoder::drawInstanced(MTLPrimitiveType primitiveType,
+                                                          uint32_t vertexStart,
+                                                          uint32_t vertexCount,
+                                                          uint32_t instances)
+{
+    [get() drawPrimitives:primitiveType
+              vertexStart:vertexStart
+              vertexCount:vertexCount
+            instanceCount:instances];
+
+    return *this;
+}
+
 RenderCommandEncoder &RenderCommandEncoder::drawIndexed(MTLPrimitiveType primitiveType,
                                                         uint32_t indexCount,
                                                         MTLIndexType indexType,
@@ -697,12 +711,12 @@ RenderCommandEncoder &RenderCommandEncoder::drawIndexed(MTLPrimitiveType primiti
     return *this;
 }
 
-RenderCommandEncoder &RenderCommandEncoder::drawIndexedBaseVertex(MTLPrimitiveType primitiveType,
-                                                                  uint32_t indexCount,
-                                                                  MTLIndexType indexType,
-                                                                  const BufferRef &indexBuffer,
-                                                                  size_t bufferOffset,
-                                                                  uint32_t baseVertex)
+RenderCommandEncoder &RenderCommandEncoder::drawIndexedInstanced(MTLPrimitiveType primitiveType,
+                                                                 uint32_t indexCount,
+                                                                 MTLIndexType indexType,
+                                                                 const BufferRef &indexBuffer,
+                                                                 size_t bufferOffset,
+                                                                 uint32_t instances)
 {
     if (!indexBuffer)
     {
@@ -715,7 +729,32 @@ RenderCommandEncoder &RenderCommandEncoder::drawIndexedBaseVertex(MTLPrimitiveTy
                        indexType:indexType
                      indexBuffer:indexBuffer->get()
                indexBufferOffset:bufferOffset
-                   instanceCount:1
+                   instanceCount:instances];
+
+    return *this;
+}
+
+RenderCommandEncoder &RenderCommandEncoder::drawIndexedInstancedBaseVertex(
+    MTLPrimitiveType primitiveType,
+    uint32_t indexCount,
+    MTLIndexType indexType,
+    const BufferRef &indexBuffer,
+    size_t bufferOffset,
+    uint32_t instances,
+    uint32_t baseVertex)
+{
+    if (!indexBuffer)
+    {
+        return *this;
+    }
+
+    cmdBuffer().setReadDependency(indexBuffer);
+    [get() drawIndexedPrimitives:primitiveType
+                      indexCount:indexCount
+                       indexType:indexType
+                     indexBuffer:indexBuffer->get()
+               indexBufferOffset:bufferOffset
+                   instanceCount:instances
                       baseVertex:baseVertex
                     baseInstance:0];
 
@@ -786,6 +825,39 @@ BlitCommandEncoder &BlitCommandEncoder::restart()
 
         return *this;
     }
+}
+
+BlitCommandEncoder &BlitCommandEncoder::copyBufferToTexture(const BufferRef &src,
+                                                            size_t srcOffset,
+                                                            size_t srcBytesPerRow,
+                                                            size_t srcBytesPerImage,
+                                                            MTLSize srcSize,
+                                                            const TextureRef &dst,
+                                                            uint32_t dstSlice,
+                                                            uint32_t dstLevel,
+                                                            MTLOrigin dstOrigin,
+                                                            MTLBlitOption blitOption)
+{
+    if (!src || !dst)
+    {
+        return *this;
+    }
+
+    cmdBuffer().setReadDependency(src);
+    cmdBuffer().setWriteDependency(dst);
+
+    [get() copyFromBuffer:src->get()
+               sourceOffset:srcOffset
+          sourceBytesPerRow:srcBytesPerRow
+        sourceBytesPerImage:srcBytesPerImage
+                 sourceSize:srcSize
+                  toTexture:dst->get()
+           destinationSlice:dstSlice
+           destinationLevel:dstLevel
+          destinationOrigin:dstOrigin
+                    options:blitOption];
+
+    return *this;
 }
 
 BlitCommandEncoder &BlitCommandEncoder::copyTexture(const TextureRef &dst,

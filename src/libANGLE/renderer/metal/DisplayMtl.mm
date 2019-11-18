@@ -270,10 +270,15 @@ egl::ConfigSet DisplayMtl::generateConfigs()
     config.bindToTextureRGB  = EGL_FALSE;
     config.bindToTextureRGBA = EGL_FALSE;
 
-    config.surfaceType = EGL_WINDOW_BIT | EGL_PBUFFER_BIT;
+    config.surfaceType = EGL_WINDOW_BIT;
 
+#if TARGET_OS_OSX || TARGET_OS_MACCATALYST
+    config.minSwapInterval = 0;
+    config.maxSwapInterval = 1;
+#else
     config.minSwapInterval = 1;
     config.maxSwapInterval = 1;
+#endif
 
     config.renderTargetFormat = GL_RGBA8;
     config.depthStencilFormat = GL_DEPTH24_STENCIL8;
@@ -355,6 +360,7 @@ const gl::Extensions &DisplayMtl::getNativeExtensions() const
 
 const mtl::TextureRef &DisplayMtl::getNullTexture(const gl::Context *context, gl::TextureType type)
 {
+    // TODO(hqle): Use rx::IncompleteTextureSet.
     ContextMtl *contextMtl = mtl::GetImpl(context);
     if (!mNullTextures[type])
     {
@@ -567,9 +573,8 @@ void DisplayMtl::initializeExtensions() const
     mNativeExtensions.semaphore   = false;
     mNativeExtensions.semaphoreFd = false;
 
-    // TODO: Enable this always and emulate instanced draws if any divisor exceeds the maximum
-    // supported.  http://anglebug.com/2672
-    mNativeExtensions.instancedArraysANGLE = false;
+    mNativeExtensions.instancedArraysANGLE = mFeatures.hasBaseVertexInstancedDraw.enabled;
+    mNativeExtensions.instancedArraysEXT   = mNativeExtensions.instancedArraysANGLE;
 
     mNativeExtensions.robustBufferAccessBehavior = false;
 
