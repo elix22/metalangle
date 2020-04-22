@@ -448,6 +448,14 @@ void RendererVk::ensureCapsInitialized() const
             maxCombinedAtomicCounterBuffers;
         mNativeCaps.maxGeometryShaderInvocations = limitsVk.maxGeometryShaderInvocations;
     }
+
+    // GL_APPLE_clip_distance/GL_EXT_clip_cull_distance
+    if (mPhysicalDeviceFeatures.shaderClipDistance && limitsVk.maxClipDistances >= 8)
+    {
+        mNativeExtensions.clipDistanceAPPLE = true;
+        mNativeCaps.maxClipDistances =
+            std::min<GLuint>(limitsVk.maxClipDistances, gl::IMPLEMENTATION_MAX_CLIP_DISTANCES);
+    }
 }
 
 namespace egl_vk
@@ -507,7 +515,7 @@ egl::Config GenerateDefaultConfig(const RendererVk *renderer,
     config.bindToTextureRGB   = colorFormat.format == GL_RGB;
     config.bindToTextureRGBA  = colorFormat.format == GL_RGBA || colorFormat.format == GL_BGRA_EXT;
     config.colorBufferType    = EGL_RGB_BUFFER;
-    config.configCaveat       = EGL_NONE;
+    config.configCaveat       = GetConfigCaveat(colorFormat.internalFormat);
     config.conformant         = es2Support | es3Support;
     config.depthSize          = depthStencilFormat.depthBits;
     config.stencilSize        = depthStencilFormat.stencilBits;

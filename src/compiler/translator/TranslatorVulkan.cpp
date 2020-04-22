@@ -28,6 +28,7 @@
 #include "compiler/translator/tree_util/FindFunction.h"
 #include "compiler/translator/tree_util/FindMain.h"
 #include "compiler/translator/tree_util/IntermNode_util.h"
+#include "compiler/translator/tree_util/ReplaceClipDistanceVariable.h"
 #include "compiler/translator/tree_util/ReplaceVariable.h"
 #include "compiler/translator/tree_util/RunAtTheEndOfShader.h"
 #include "compiler/translator/util.h"
@@ -170,28 +171,16 @@ constexpr const char kXfbActiveUnpaused[]    = "xfbActiveUnpaused";
 constexpr const char kXfbBufferOffsets[]     = "xfbBufferOffsets";
 constexpr const char kAcbBufferOffsets[]     = "acbBufferOffsets";
 constexpr const char kDepthRange[]           = "depthRange";
+constexpr const char kClipDistancesEnabled[] = "clipDistancesEnabled";
 
-constexpr size_t kNumGraphicsDriverUniforms                                                = 8;
+constexpr size_t kNumGraphicsDriverUniforms                                                = 9;
 constexpr std::array<const char *, kNumGraphicsDriverUniforms> kGraphicsDriverUniformNames = {
     {kViewport, kHalfRenderAreaHeight, kViewportYScale, kNegViewportYScale, kXfbActiveUnpaused,
-     kXfbBufferOffsets, kAcbBufferOffsets, kDepthRange}};
+     kXfbBufferOffsets, kAcbBufferOffsets, kDepthRange, kClipDistancesEnabled}};
 
 constexpr size_t kNumComputeDriverUniforms                                               = 1;
 constexpr std::array<const char *, kNumComputeDriverUniforms> kComputeDriverUniformNames = {
     {kAcbBufferOffsets}};
-
-size_t FindFieldIndex(const TFieldList &fieldList, const char *fieldName)
-{
-    for (size_t fieldIndex = 0; fieldIndex < fieldList.size(); ++fieldIndex)
-    {
-        if (strcmp(fieldList[fieldIndex]->name().data(), fieldName) == 0)
-        {
-            return fieldIndex;
-        }
-    }
-    UNREACHABLE();
-    return 0;
-}
 
 TIntermBinary *CreateDriverUniformRef(const TVariable *driverUniforms, const char *fieldName)
 {
@@ -338,7 +327,9 @@ ANGLE_NO_DISCARD bool AppendVertexShaderTransformFeedbackOutputToMain(TCompiler 
 // variable.
 //
 // There are Graphics and Compute variations as they require different uniforms.
-const TVariable *AddGraphicsDriverUniformsToShader(TIntermBlock *root, TSymbolTable *symbolTable)
+const TVariable *AddGraphicsDriverUniformsToShader(TIntermBlock *root,
+                                                   TSymbolTable *symbolTable,
+                                                   const std::vector<TField *> &additionalFields)
 {
     // Init the depth range type.
     TFieldList *depthRangeParamsFields = new TFieldList();
@@ -378,6 +369,7 @@ const TVariable *AddGraphicsDriverUniformsToShader(TIntermBlock *root, TSymbolTa
         new TType(EbtInt, 4),
         new TType(EbtUInt, 4),
         emulatedDepthRangeType,
+        new TType(EbtUInt),  // uint clipDistancesEnabled;  // 32 bits for 32 clip distances max
     }};
 
     for (size_t uniformIndex = 0; uniformIndex < kNumGraphicsDriverUniforms; ++uniformIndex)
@@ -388,6 +380,10 @@ const TVariable *AddGraphicsDriverUniformsToShader(TIntermBlock *root, TSymbolTa
                        SymbolType::AngleInternal);
         driverFieldList->push_back(driverUniformField);
     }
+
+    // Back-end specific fields
+    driverFieldList->insert(driverFieldList->end(), additionalFields.begin(),
+                            additionalFields.end());
 
     // Define a driver uniform block "ANGLEUniformBlock" with instance name "ANGLEUniforms".
     return DeclareInterfaceBlock(root, symbolTable, driverFieldList, EvqUniform,
@@ -786,7 +782,10 @@ bool TranslatorVulkan::translateImpl(TIntermBlock *root,
     }
     else
     {
-        driverUniforms = AddGraphicsDriverUniformsToShader(root, &getSymbolTable());
+        std::vector<TField *> additionalFields;
+        createGraphicsDriverUniformAdditionFields(&additionalFields);
+        driverUniforms =
+            AddGraphicsDriverUniformsToShader(root, &getSymbolTable(), additionalFields);
     }
 
     if (atomicCounterCount > 0)
@@ -910,6 +909,23 @@ bool TranslatorVulkan::translateImpl(TIntermBlock *root,
 
         // Append a macro for transform feedback substitution prior to modifying depth.
         if (!AppendVertexShaderTransformFeedbackOutputToMain(this, root, &getSymbolTable()))
+        {
+            return false;
+        }
+
+        // Search for the gl_ClipDistance usage, if its used, we need to do some replacements.
+        bool useClipDistance = false;
+        for (const ShaderVariable &outputVarying : mOutputVaryings)
+        {
+            if (outputVarying.name == "gl_ClipDistance")
+            {
+                useClipDistance = true;
+                break;
+            }
+        }
+        if (useClipDistance && !ReplaceClipDistanceAssignments(
+                                   this, root, &getSymbolTable(),
+                                   CreateDriverUniformRef(driverUniforms, kClipDistancesEnabled)))
         {
             return false;
         }

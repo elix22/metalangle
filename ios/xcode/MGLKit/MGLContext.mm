@@ -9,6 +9,7 @@
 #import "MGLContext.h"
 #import "MGLContext+Private.h"
 
+#include <pthread.h>
 #include <vector>
 
 #include <EGL/egl.h>
@@ -26,10 +27,35 @@ struct ThreadLocalInfo
     __weak MGLLayer *currentLayer     = nil;
 };
 
+#if TARGET_OS_SIMULATOR
+pthread_key_t gThreadSpecificKey;
+void ThreadTLSDestructor(void *data)
+{
+    auto tlsData = reinterpret_cast<ThreadLocalInfo *>(data);
+    delete tlsData;
+}
+
+#endif
+
 ThreadLocalInfo &CurrentTLS()
 {
+#if TARGET_OS_SIMULATOR
+    // There are some issuess with C++11 TLS could not be compiled on iOS
+    // simulator, so we have to fallback to use pthread TLS.
+    static pthread_once_t sKeyOnce = PTHREAD_ONCE_INIT;
+    pthread_once(&sKeyOnce, [] { pthread_key_create(&gThreadSpecificKey, ThreadTLSDestructor); });
+
+    auto tlsData = reinterpret_cast<ThreadLocalInfo *>(pthread_getspecific(gThreadSpecificKey));
+    if (!tlsData)
+    {
+        tlsData = new ThreadLocalInfo();
+        pthread_setspecific(gThreadSpecificKey, tlsData);
+    }
+    return *tlsData;
+#else  // TARGET_OS_SIMULATOR
     static thread_local ThreadLocalInfo tls;
     return tls;
+#endif
 }
 
 void Throw(NSString *msg)
@@ -38,16 +64,43 @@ void Throw(NSString *msg)
 }
 }
 
+// MGLSharegroup implementation
+@interface MGLSharegroup ()
+@property(atomic) MGLContext *firstContext;
+@end
+
+@implementation MGLSharegroup
+@end
+
 // MGLContext implementation
 
 @implementation MGLContext
 
 - (id)initWithAPI:(MGLRenderingAPI)api
 {
+    return [self initWithAPI:api sharegroup:nil];
+}
+
+- (id)initWithAPI:(MGLRenderingAPI)api sharegroup:(MGLSharegroup *)sharegroup
+{
     if (self = [super init])
     {
         _renderingApi = api;
         _display      = [MGLDisplay defaultDisplay];
+        if (sharegroup)
+        {
+            _sharegroup = sharegroup;
+        }
+        else
+        {
+            _sharegroup = [MGLSharegroup new];
+        }
+
+        if (!_sharegroup.firstContext)
+        {
+            _sharegroup.firstContext = self;
+        }
+
         [self initContext];
     }
     return self;
@@ -111,13 +164,22 @@ void Throw(NSString *msg)
             ctxMajorVersion = 2;
             ctxMinorVersion = 0;
             break;
+        case kMGLRenderingAPIOpenGLES3:
+            ctxMajorVersion = 3;
+            ctxMinorVersion = 0;
+            break;
         default:
             UNREACHABLE();
     }
     EGLint ctxAttribs[] = {EGL_CONTEXT_MAJOR_VERSION, ctxMajorVersion, EGL_CONTEXT_MINOR_VERSION,
                            ctxMinorVersion, EGL_NONE};
 
-    _eglContext = eglCreateContext(_display.eglDisplay, config, EGL_NO_CONTEXT, ctxAttribs);
+    EGLContext sharedContext = EGL_NO_CONTEXT;
+    if (_sharegroup.firstContext != self)
+    {
+        sharedContext = _sharegroup.firstContext.eglContext;
+    }
+    _eglContext = eglCreateContext(_display.eglDisplay, config, sharedContext, ctxAttribs);
     if (_eglContext == EGL_NO_CONTEXT)
     {
         Throw(@"Failed to call eglCreateContext()");
@@ -192,8 +254,9 @@ void Throw(NSString *msg)
         }
     }
 
-    CurrentTLS().currentContext = self;
-    CurrentTLS().currentLayer   = layer;
+    ThreadLocalInfo &tlsData = CurrentTLS();
+    tlsData.currentContext   = self;
+    tlsData.currentLayer     = layer;
 
     return YES;
 }
