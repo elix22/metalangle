@@ -225,7 +225,7 @@ void ProgramMtl::reset(ContextMtl *context)
         block.uniformLayout.clear();
     }
 
-    for (gl::ShaderType shaderType : gl::AllGLES2ShaderTypes())
+    for (gl::ShaderType shaderType : gl::AllShaderTypes())
     {
         mMslShaderTranslateInfo[shaderType].hasArgumentBuffer = false;
         for (mtl::SamplerBinding &binding :
@@ -955,7 +955,7 @@ angle::Result ProgramMtl::setupDraw(const gl::Context *glContext,
     ANGLE_TRY(commitUniforms(context, cmdEncoder));
     ANGLE_TRY(updateTextures(glContext, cmdEncoder, forceTexturesSetting));
 
-    if (uniformBuffersDirty)
+    if (uniformBuffersDirty || pipelineDescChanged)
     {
         ANGLE_TRY(updateUniformBuffers(context, cmdEncoder, pipelineDesc));
     }

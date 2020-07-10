@@ -28,6 +28,7 @@ void Throw(NSString *msg)
         self.autoresizingMask = kCALayerWidthSizable | kCALayerHeightSizable;
 #else
         self.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        self.enableSetNeedsDisplay = YES;
 #endif
     }
     return self;
@@ -42,7 +43,17 @@ void Throw(NSString *msg)
         self.autoresizingMask = kCALayerWidthSizable | kCALayerHeightSizable;
 #else
         self.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        self.enableSetNeedsDisplay = YES;
 #endif
+    }
+    return self;
+}
+
+- (id)initWithFrame:(CGRect)frame context:(MGLContext *)context
+{
+    if (self = [self initWithFrame:frame])
+    {
+        [self setContext:context];
     }
     return self;
 }
@@ -80,6 +91,24 @@ void Throw(NSString *msg)
     _context = context;
 }
 
+#if TARGET_OS_IOS || TARGET_OS_TV
+- (void)setNeedsDisplay
+{
+    if (_enableSetNeedsDisplay)
+    {
+        [super setNeedsDisplay];
+    }
+}
+
+- (void)setNeedsDisplayInRect:(CGRect)invalidRect
+{
+    if (_enableSetNeedsDisplay)
+    {
+        [super setNeedsDisplayInRect:invalidRect];
+    }
+}
+#endif  // TARGET_OS_IOS || TARGET_OS_TV
+
 - (void)setRetainedBacking:(BOOL)retainedBacking
 {
     self.glLayer.retainedBacking = _retainedBacking = retainedBacking;
@@ -110,6 +139,11 @@ void Throw(NSString *msg)
     [self drawRect:self.bounds];
 }
 
+- (void)bindDrawable
+{
+    [self.glLayer bindDefaultFrameBuffer];
+}
+
 - (CGSize)drawableSize
 {
     if (!self.layer)
@@ -118,6 +152,21 @@ void Throw(NSString *msg)
         return zero;
     }
     return self.glLayer.drawableSize;
+}
+
+- (NSInteger)drawableWidth
+{
+    return self.drawableSize.width;
+}
+
+- (NSInteger)drawableHeight
+{
+    return self.drawableSize.height;
+}
+
+- (uint32_t)defaultOpenGLFrameBufferID
+{
+    return self.glLayer.defaultOpenGLFrameBufferID;
 }
 
 #if TARGET_OS_OSX
